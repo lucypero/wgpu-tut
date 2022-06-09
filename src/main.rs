@@ -1,3 +1,5 @@
+use wgpu_tetris::run;
+
 fn main() {
-    println!("Hello, world!");
+    run();
 }
