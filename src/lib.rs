@@ -1,8 +1,10 @@
+use std::mem;
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},
     window::{WindowBuilder, Window},
 };
+use wgpu::util::DeviceExt;
 
 struct State {
     surface: wgpu::Surface,
@@ -11,12 +13,42 @@ struct State {
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
     render_pipeline: wgpu::RenderPipeline,
-    render_pipeline_2: wgpu::RenderPipeline,
-    use_weird_pipeline:bool,
+    vertex_buffer: wgpu::Buffer,
+    num_vertices: u32,
 
     // my fields
     clear_color: wgpu::Color,
+    render_pipeline_2: wgpu::RenderPipeline,
+    use_weird_pipeline: bool,
 }
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct Vertex {
+    position: [f32; 3],
+    color: [f32; 3],
+}
+
+impl Vertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 2] =
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+
+    fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        use std::mem;
+
+        wgpu::VertexBufferLayout {
+            array_stride: mem::size_of::<Self>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
+}
+
+const VERTICES: &[Vertex] = &[
+    Vertex { position: [0.0, 0.5, 0.0], color: [1.0, 0.0, 0.0] },
+    Vertex { position: [-0.5, -0.5, 0.0], color: [0.0, 1.0, 0.0] },
+    Vertex { position: [0.5, -0.5, 0.0], color: [0.0, 0.0, 1.0] },
+];
 
 impl State {
     // Creating some of the wgpu types requires async code
@@ -70,6 +102,16 @@ impl State {
         let render_pipeline = Self::create_pipeline(&device, &config, &shader, &render_pipeline_layout);
         let render_pipeline_2 = Self::create_pipeline(&device, &config, &shader_2, &render_pipeline_layout);
 
+        let vertex_buffer = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(VERTICES),
+                usage: wgpu::BufferUsages::VERTEX,
+            }
+        );
+
+        let num_vertices = VERTICES.len() as u32;
+
         Self {
             surface,
             device,
@@ -80,6 +122,8 @@ impl State {
             render_pipeline,
             render_pipeline_2,
             use_weird_pipeline: false,
+            vertex_buffer,
+            num_vertices
         }
     }
 
@@ -90,7 +134,7 @@ impl State {
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[],
+                buffers: &[Vertex::desc()],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
@@ -191,7 +235,8 @@ impl State {
             } else {
                 render_pass.set_pipeline(&self.render_pipeline);
             }
-            render_pass.draw(0..3, 0..1);
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.draw(0..self.num_vertices, 0..1);
         }
 
         // submit will accept anything that implements IntoIter
