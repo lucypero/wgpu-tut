@@ -5,6 +5,8 @@ use winit::{
 };
 use wgpu::util::DeviceExt;
 
+mod texture;
+
 struct State {
     surface: wgpu::Surface,
     device: wgpu::Device,
@@ -15,23 +17,25 @@ struct State {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
     num_indices: u32,
+    diffuse_bind_group: wgpu::BindGroup,
+    _diffuse_texture: texture::Texture,
 
     // my fields
     clear_color: wgpu::Color,
-    render_pipeline_2: wgpu::RenderPipeline,
-    use_weird_pipeline: bool,
+    use_alternate_thing: bool,
+    vergil_bind_group: wgpu::BindGroup,
 }
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Vertex {
     position: [f32; 3],
-    color: [f32; 3],
+    tex_coords: [f32; 2],
 }
 
 impl Vertex {
     const ATTRIBS: [wgpu::VertexAttribute; 2] =
-        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
+        wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x2];
 
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
         use std::mem;
@@ -45,11 +49,11 @@ impl Vertex {
 }
 
 const VERTICES: &[Vertex] = &[
-    Vertex { position: [-0.0868241, 0.49240386, 0.0], color: [0.5, 0.0, 0.5] }, // A
-    Vertex { position: [-0.49513406, 0.06958647, 0.0], color: [0.5, 0.0, 0.5] }, // B
-    Vertex { position: [-0.21918549, -0.44939706, 0.0], color: [0.5, 0.0, 0.5] }, // C
-    Vertex { position: [0.35966998, -0.3473291, 0.0], color: [0.5, 0.0, 0.5] }, // D
-    Vertex { position: [0.44147372, 0.2347359, 0.0], color: [0.5, 0.0, 0.5] }, // E
+    Vertex { position: [-0.0868241, 0.49240386, 0.0], tex_coords: [0.4131759, 0.00759614], }, // A
+    Vertex { position: [-0.49513406, 0.06958647, 0.0], tex_coords: [0.0048659444, 0.43041354], }, // B
+    Vertex { position: [-0.21918549, -0.44939706, 0.0], tex_coords: [0.28081453, 0.949397], }, // C
+    Vertex { position: [0.35966998, -0.3473291, 0.0], tex_coords: [0.85967, 0.84732914], }, // D
+    Vertex { position: [0.44147372, 0.2347359, 0.0], tex_coords: [0.9414737, 0.2652641], }, // E
 ];
 
 const INDICES: &[u16] = &[
@@ -66,6 +70,8 @@ impl State {
         // The instance is a handle to our GPU
         // Backends::all => Vulkan + Metal + DX12 + Browser WebGPU
         let instance = wgpu::Instance::new(wgpu::Backends::all());
+        //println!("{:?}",instance.generate_report());
+
         let surface = unsafe { instance.create_surface(window) };
         let adapter = instance.request_adapter(
             &wgpu::RequestAdapterOptions {
@@ -97,18 +103,79 @@ impl State {
         };
         surface.configure(&device, &config);
 
+        //image
+        let diffuse_texture = texture::Texture::from_bytes(&device, &queue, include_bytes!("happy-tree.png"), "happy-tree.png").unwrap();
+        let vergil_texture = texture::Texture::from_bytes(&device, &queue, include_bytes!("vergil.png"), "vergil.png").unwrap();
+
+        let texture_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        // This should match the filterable field of the
+                        // corresponding Texture entry above.
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+                label: Some("texture_bind_group_layout"),
+            });
+
+        let diffuse_bind_group = device.create_bind_group(
+            &wgpu::BindGroupDescriptor {
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&diffuse_texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&diffuse_texture.sampler),
+                    }
+                ],
+                label: Some("diffuse_bind_group"),
+            }
+        );
+
+        let vergil_bind_group = device.create_bind_group(
+            &wgpu::BindGroupDescriptor {
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&vergil_texture.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&vergil_texture.sampler),
+                    }
+                ],
+                label: Some("vergil_bind_group"),
+            }
+        );
+
         let shader = device.create_shader_module(&wgpu::include_wgsl!("shader.wgsl"));
-        let shader_2 = device.create_shader_module(&wgpu::include_wgsl!("shader2.wgsl"));
 
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
-                bind_group_layouts: &[],
+                bind_group_layouts: &[&texture_bind_group_layout],
                 push_constant_ranges: &[],
             });
 
         let render_pipeline = Self::create_pipeline(&device, &config, &shader, &render_pipeline_layout);
-        let render_pipeline_2 = Self::create_pipeline(&device, &config, &shader_2, &render_pipeline_layout);
 
         let vertex_buffer = device.create_buffer_init(
             &wgpu::util::BufferInitDescriptor {
@@ -136,11 +203,13 @@ impl State {
             size,
             clear_color: wgpu::Color::BLUE,
             render_pipeline,
-            render_pipeline_2,
-            use_weird_pipeline: false,
+            use_alternate_thing: false,
             vertex_buffer,
             index_buffer,
-            num_indices
+            num_indices,
+            diffuse_bind_group,
+            _diffuse_texture: diffuse_texture,
+            vergil_bind_group
         }
     }
 
@@ -217,7 +286,7 @@ impl State {
                 },
                 ..
             } => {
-                self.use_weird_pipeline = !self.use_weird_pipeline;
+                self.use_alternate_thing = !self.use_alternate_thing;
                 true
             }
             _ => false
@@ -247,10 +316,12 @@ impl State {
                 depth_stencil_attachment: None,
             });
 
-            if self.use_weird_pipeline {
-                render_pass.set_pipeline(&self.render_pipeline_2);
+            render_pass.set_pipeline(&self.render_pipeline);
+
+            if self.use_alternate_thing {
+                render_pass.set_bind_group(0, &self.vergil_bind_group, &[]);
             } else {
-                render_pass.set_pipeline(&self.render_pipeline);
+                render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             }
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
@@ -267,7 +338,9 @@ impl State {
 pub async fn run() {
     env_logger::init();
     let event_loop = EventLoop::new();
-    let window = WindowBuilder::new().build(&event_loop).unwrap();
+    let window = WindowBuilder::new()
+        .with_title("wgpu_tetris")
+        .build(&event_loop).unwrap();
 
     let mut state = State::new(&window).await;
 
